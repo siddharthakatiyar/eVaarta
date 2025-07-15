@@ -27,7 +27,7 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Conn: conn,
 		Send: make(chan []byte),
 	}
-
-	go client.ReadMessages()
 	go client.WriteMessages()
+	client.ReadMessages()
+	
 }
