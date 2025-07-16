@@ -3,87 +3,151 @@ package ws
 import (
 	"encoding/json"
 	"log"
-	
+	"time"
+
 	"github.com/gorilla/websocket"
 )
 
+/* ------------------------------ Client Model ------------------------------ */
+
 type Client struct {
-	ID     string
-	Room   string
-	Conn   *websocket.Conn
-	Send   chan []byte
+	ID   string
+	Room string
+	Conn *websocket.Conn
+	Send chan []byte
 }
+
+/* ------------------------------- Read Pump -------------------------------- */
+
 func (c *Client) ReadMessages() {
-	defer c.Conn.Close()
+	defer c.cleanup()
 
 	for {
-		_, msgBytes, err := c.Conn.ReadMessage()
+		_, raw, err := c.Conn.ReadMessage()
 		if err != nil {
-			log.Println("Read error:", err)
-			// break
+			log.Printf("Read error (%s): %v", c.ID, err)
 			return
 		}
-
-		if len(msgBytes) == 0 {
-			log.Println("Empty message received — skipping")
+		if len(raw) == 0 {
 			continue
 		}
 
-		log.Println("Raw message:", string(msgBytes))
-
 		var msg Message
-		if err := json.Unmarshal(msgBytes, &msg); err != nil {
+		if err := json.Unmarshal(raw, &msg); err != nil {
 			log.Println("Invalid JSON:", err)
 			continue
 		}
 
 		switch msg.Type {
-		case "join":
-			c.ID = msg.Sender
-			c.Room = msg.Room
 
+		/* --------------------------- JOIN / RECONNECT -------------------------- */
+		case "join", "reconnect":
+			c.ID, c.Room = msg.Sender, msg.Room
+			rmu.Lock()
 			if rooms[c.Room] == nil {
 				rooms[c.Room] = make(map[string]*Client)
 			}
 			rooms[c.Room][c.ID] = c
+			rmu.Unlock()
 			log.Printf("Client %s joined room %s", c.ID, c.Room)
 
-		case "offer", "answer", "ice", "chat":
-			if msg.Target == "" {
-				log.Println("Missing target for message type:", msg.Type)
-				continue
-			}
-			if roomClients, ok := rooms[msg.Room]; ok {
-				if targetClient, ok := roomClients[msg.Target]; ok {
-					select {
-					case targetClient.Send <- msgBytes:
-					default:
-						log.Println("Send channel blocked for target:", msg.Target)
-					}
-				} else {
-					log.Println("Target client not found:", msg.Target)
-				}
+			if msg.Type == "reconnect" {
+				// Inform peers so they can renegotiate streams
+				c.broadcast(Message{Type: "peer-reconnected", Room: c.Room, Sender: c.ID})
 			}
 
-		case "leave":
-			if roomClients, ok := rooms[c.Room]; ok {
-				delete(roomClients, c.ID)
+		/* ------------------------ CORE SIGNALING FLOW -------------------------- */
+		case "offer", "answer", "ice":
+			if msg.Target == "" {
+				log.Println("Missing target for signaling")
+				continue
 			}
+			rmu.RLock()
+			target, ok := rooms[msg.Room][msg.Target]
+			rmu.RUnlock()
+			if ok {
+				target.safeSend(raw)
+			}
+
+		/* ------------------------------- LEAVE --------------------------------- */
+		case "leave":
+			c.cleanup()
+
+		/* ----------------------------- HEARTBEAT ------------------------------- */
+		case "ping":
+			c.safeSend([]byte(`{"type":"pong"}`))
+
 		default:
 			log.Println("Unknown message type:", msg.Type)
 		}
 	}
 }
 
+/* ------------------------------- Write Pump ------------------------------- */
 
 func (c *Client) WriteMessages() {
-	defer c.Conn.Close()
-
+	defer c.cleanup()
 	for msg := range c.Send {
-		err := c.Conn.WriteMessage(websocket.TextMessage, msg)
-		if err != nil {
-			log.Println("Write error:", err)
-			break
+		if err := c.Conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			log.Printf("Write error (%s): %v", c.ID, err)
+			return
 		}
 	}
+}
+
+/* -------------------------------- Helpers --------------------------------- */
+
+func (c *Client) safeSend(b []byte) {
+	select {
+	case c.Send <- b:
+	default:
+		log.Printf("Send buffer full; dropping message to %s", c.ID)
+	}
+}
+
+func (c *Client) broadcast(m Message) {
+	bytes, _ := json.Marshal(m)
+	rmu.RLock()
+	defer rmu.RUnlock()
+	for id, peer := range rooms[c.Room] {
+		if id != c.ID {
+			peer.safeSend(bytes)
+		}
+	}
+}
+
+/* -------------------------------- Cleanup --------------------------------- */
+
+func (c *Client) cleanup() {
+	// Remove client from room & notify peers
+	rmu.Lock()
+	if rc, ok := rooms[c.Room]; ok {
+		delete(rc, c.ID)
+		if len(rc) == 0 {
+			delete(rooms, c.Room)
+		} else {
+			leave, _ := json.Marshal(Message{Type: "peer-left", Room: c.Room, Sender: c.ID})
+			for _, peer := range rc {
+				peer.safeSend(leave)
+			}
+		}
+	}
+	rmu.Unlock()
+
+	// Close resources
+	close(c.Send)
+	c.Conn.Close()
+
+	// Ghost-client safety cleanup
+	go func(room, id string) {
+		time.Sleep(30 * time.Second)
+		rmu.Lock()
+		if rc, ok := rooms[room]; ok {
+			delete(rc, id)
+			if len(rc) == 0 {
+				delete(rooms, room)
+			}
+		}
+		rmu.Unlock()
+	}(c.Room, c.ID)
 }
