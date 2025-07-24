@@ -1,0 +1,14 @@
+{
+	"scripts": {
+		"prepare": "chmod -R ug+x .husky"
+	},
+	"lint-staged": {
+		"frontend/**/*.{ts,tsx,js,jsx,json,css,md}": [
+			"prettier --write"
+		]
+	},
+	"devDependencies": {
+		"husky": "^9.1.7",
+		"lint-staged": "^16.1.2"
+	}
+}
