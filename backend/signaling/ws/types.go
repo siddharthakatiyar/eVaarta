@@ -2,11 +2,12 @@ package ws
 
 import "encoding/json"
 
-// Message – canonical structure for every payload exchanged.
 type Message struct {
-	Type   string          `json:"type"`             // join, offer, answer, ice, reconnect, leave, ping
-	Room   string          `json:"room"`             // room identifier
-	Sender string          `json:"sender"`           // sender/client ID
-	Target string          `json:"target,omitempty"` // target ID (for direct messages)
-	Data   json.RawMessage `json:"data,omitempty"`   // SDP / ICE data or custom payload
+    Type    string            `json:"type"`
+    Room    string            `json:"room"`
+    Sender  string            `json:"from"`
+    Target  string            `json:"to,omitempty"`
+    SDP     json.RawMessage   `json:"sdp,omitempty"`
+    Candidate json.RawMessage `json:"candidate,omitempty"`
+    Clients []string          `json:"clients,omitempty"`
 }

@@ -30,7 +30,7 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	client := &Client{
 		Conn: conn,
-		Send: make(chan []byte, 16), // buffered to avoid blocking
+		Send: make(chan []byte, 256), 
 	}
 
 	go client.WriteMessages()
