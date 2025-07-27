@@ -1,35 +1,64 @@
 "use client";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useWebRTC } from "@/hooks/useWebRTC";
 
 export default function Room() {
-  const params = useSearchParams();
-  const roomId = params.get("roomId") ?? undefined;
-  const { clients, localVideoRef, bindVideo } = useWebRTC(roomId);
+  const params  = useSearchParams();
+  const router  = useRouter();
+  const roomId  = params.get("roomId") ?? undefined;
+
+  const {
+    clients,
+    localVideoRef,
+    bindVideo,
+    micOn,
+    camOn,
+    toggleMic,
+    toggleCam,
+    leaveRoom,
+  } = useWebRTC(roomId);
 
   if (!roomId) return <p className="p-4">roomId missing</p>;
 
-  return (
-    <section className="flex flex-wrap gap-4 p-4">
-      {/* self */}
-      <video
-        ref={localVideoRef}
-        autoPlay
-        playsInline
-        muted
-        className="w-72 bg-black rounded-lg"
-      />
+  const handleLeave = () => {
+    leaveRoom();
+    router.push("/");
+  };
 
-      {/* remote peers */}
-      {clients.map((id) => (
+  return (
+    <div className="p-4 flex flex-col gap-4">
+      {/* TOOLBAR */}
+      <div className="flex gap-4">
+        <button className="px-3 py-1 bg-gray-800 text-white rounded" onClick={toggleMic}>
+          {micOn ? "Mute Mic" : "Unmute Mic"}
+        </button>
+        <button className="px-3 py-1 bg-gray-800 text-white rounded" onClick={toggleCam}>
+          {camOn ? "Stop Cam" : "Start Cam"}
+        </button>
+        <button className="px-3 py-1 bg-red-600 text-white rounded" onClick={handleLeave}>
+          Leave Room
+        </button>
+      </div>
+
+      {/* VIDEO GRID */}
+      <section className="flex flex-wrap gap-4 mt-4">
         <video
-          key={id}
-          ref={(el) => bindVideo(id, el)}
+          ref={localVideoRef}
           autoPlay
           playsInline
+          muted
           className="w-72 bg-black rounded-lg"
         />
-      ))}
-    </section>
+        {clients.map((id) => (
+          <video
+            key={id}
+            ref={(el) => bindVideo(id, el)}
+            autoPlay
+            playsInline
+            className="w-72 bg-black rounded-lg"
+          />
+        ))}
+      </section>
+    </div>
   );
 }
