@@ -48,7 +48,7 @@ func (c *Client) ReadMessages() {
 
 		/* ------------------------- join ------------------------- */
 		case "join":
-			c.ID, c.Room = msg.Sender, msg.Room
+			c.ID, c.Room = msg.From, msg.Room
 
 			// add to room map (thread-safe)
 			rmu.Lock()
@@ -70,7 +70,7 @@ func (c *Client) ReadMessages() {
 			welcome := Message{
 				Type:    "welcome",
 				Room:    c.Room,
-				Sender:  "server",
+				From:  "server",
 				Clients: peerIDs,
 			}
 			c.safeSend(marshal(welcome))
@@ -79,20 +79,20 @@ func (c *Client) ReadMessages() {
 			c.broadcast(Message{
 				Type:   "new-peer",
 				Room:   c.Room,
-				Sender: c.ID,
+				From: c.ID,
 			})
 
 		/* -------------- WebRTC signaling relay --------------- */
 		case "offer", "answer", "candidate":
-			if msg.Target == "" {
+			if msg.To == "" {
 				log.Println("Missing target for", msg.Type)
 				continue
 			}
 			rmu.RLock()
-			target, ok := rooms[msg.Room][msg.Target]
+			target, ok := rooms[msg.Room][msg.To]
 			rmu.RUnlock()
 			if !ok {
-				log.Printf("Target %s not found in room %s", msg.Target, msg.Room)
+				log.Printf("Target %s not found in room %s", msg.To, msg.Room)
 				continue
 			}
 			target.safeSend(raw)
@@ -100,7 +100,15 @@ func (c *Client) ReadMessages() {
 		/* -------------------------- leave -------------------------- */
 		case "leave":
 			c.cleanup()
-
+		case "chat":
+			for _, peer := range clientsInRoom(msg.Room) {
+				if peer.ID != c.ID {
+					peer.safeSend(marshal(msg))
+				}
+			}
+		
+		
+		
 		/* --------------------------- ping -------------------------- */
 		case "ping":
 			c.safeSend([]byte(`{"type":"pong"}`))
@@ -109,6 +117,21 @@ func (c *Client) ReadMessages() {
 			log.Println("Unknown message type:", msg.Type)
 		}
 	}
+}
+func clientsInRoom(room string) []*Client {
+	rmu.RLock()
+	defer rmu.RUnlock()
+
+	roomClients, ok := rooms[room]
+	if !ok {
+		return nil
+	}
+
+	clients := make([]*Client, 0, len(roomClients))
+	for _, client := range roomClients {
+		clients = append(clients, client)
+	}
+	return clients
 }
 
 /* ------------------------------------------------------------------ */
@@ -179,7 +202,7 @@ func (c *Client) cleanup() {
 			if len(rc) == 0 {
 				delete(rooms, c.Room)
 			} else {
-				exitMsg := Message{Type: "peer-left", Room: c.Room, Sender: c.ID}
+				exitMsg := Message{Type: "peer-left", Room: c.Room, From: c.ID}
 				for _, p := range rc {
 					p.safeSend(marshal(exitMsg))
 				}

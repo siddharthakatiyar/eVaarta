@@ -1,11 +1,12 @@
 "use client";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useWebRTC } from "@/hooks/useWebRTC";
+import Chat from "@/components/Chat";
 
 export default function Room() {
-  const params  = useSearchParams();
-  const router  = useRouter();
-  const roomId  = params.get("roomId") ?? undefined;
+  const params = useSearchParams();
+  const router = useRouter();
+  const roomId = params.get("roomId") ?? undefined;
 
   const {
     clients,
@@ -16,6 +17,9 @@ export default function Room() {
     toggleMic,
     toggleCam,
     leaveRoom,
+    chatMessages,
+    sendChatMessage,
+    myId,
   } = useWebRTC(roomId);
 
   if (!roomId) return <p className="p-4">roomId missing</p>;
@@ -40,25 +44,35 @@ export default function Room() {
         </button>
       </div>
 
-      {/* VIDEO GRID */}
-      <section className="flex flex-wrap gap-4 mt-4">
-        <video
-          ref={localVideoRef}
-          autoPlay
-          playsInline
-          muted
-          className="w-72 bg-black rounded-lg"
-        />
-        {clients.map((id) => (
+      {/* MAIN LAYOUT */}
+      <div className="flex flex-col md:flex-row gap-6">
+        {/* VIDEO GRID */}
+        <section className="flex flex-wrap gap-4 flex-1">
           <video
-            key={id}
-            ref={(el) => bindVideo(id, el)}
+            ref={localVideoRef}
             autoPlay
             playsInline
+            muted
             className="w-72 bg-black rounded-lg"
           />
-        ))}
-      </section>
+          {clients.map((id) => (
+            <video
+              key={id}
+              ref={(el) => bindVideo(id, el)}
+              autoPlay
+              playsInline
+              className="w-72 bg-black rounded-lg"
+            />
+          ))}
+        </section>
+
+        {/* CHAT PANEL */}
+        <Chat
+          messages={chatMessages}
+          onSend={sendChatMessage}
+          myId={myId}
+        />
+      </div>
     </div>
   );
 }

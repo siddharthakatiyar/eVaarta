@@ -10,7 +10,9 @@ interface OfferMsg { type: "offer"; room: string; from: string; to: string; sdp:
 interface AnswerMsg { type: "answer"; room: string; from: string; to: string; sdp: RTCSessionDescriptionInit }
 interface CandidateMsg { type: "candidate"; room: string; from: string; to: string; candidate: RTCIceCandidateInit }
 interface LeaveMsg { type: "leave"; room: string; from: string }
-type SigMsg = JoinMsg | WelcomeMsg | NewPeerMsg | OfferMsg | AnswerMsg | CandidateMsg | LeaveMsg;
+interface ChatMsg { type: "chat"; room: string; sender: string; text: string }
+
+type SigMsg = JoinMsg | WelcomeMsg | NewPeerMsg | OfferMsg | AnswerMsg | CandidateMsg | LeaveMsg | ChatMsg;
 
 /* ------------------------------------------------------------- */
 const rtcConfig: RTCConfiguration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
@@ -24,6 +26,7 @@ export function useWebRTC(roomId?: string) {
   const [clients, setClients] = useState<string[]>([]);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
+  const [chatMessages, setChatMessages] = useState<{ sender: string; text: string }[]>([]);
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -34,10 +37,11 @@ export function useWebRTC(roomId?: string) {
   const cleanupRef = useRef<() => void>(() => { });
 
   const selfId = useRef<string>(crypto.randomUUID());
+  // const [chatMessages, setChatMessages] = useState<{ sender: string; text: string }[]>([]);
 
-  /* helper */
   const addClient = useCallback((id: string, cb?: () => void) => {
-    setClients(list => list.includes(id) ? list : [...list, id]); cb?.();
+    setClients(list => list.includes(id) ? list : [...list, id]);
+    cb?.();
   }, []);
 
   /* ----------------------------------------------------------- */
@@ -66,12 +70,33 @@ export function useWebRTC(roomId?: string) {
 
     socket.onmessage = async ({ data }) => {
       const msg: SigMsg = JSON.parse(data);
+
       switch (msg.type) {
-        case "welcome": msg.clients.forEach(p => p !== selfId.current && createPeer(p, true)); break;
-        case "new-peer": msg.from !== selfId.current && createPeer(msg.from, false); break;
-        case "offer": msg.to === selfId.current && handleOffer(msg); break;
-        case "answer": msg.to === selfId.current && peerConns.current[msg.from]?.setRemoteDescription(new RTCSessionDescription(msg.sdp)); break;
-        case "candidate": msg.to === selfId.current && peerConns.current[msg.from]?.addIceCandidate(new RTCIceCandidate(msg.candidate)); break;
+        case "welcome":
+          msg.clients.forEach(p => p !== selfId.current && createPeer(p, true));
+          break;
+
+        case "new-peer":
+          msg.from !== selfId.current && createPeer(msg.from, false);
+          break;
+
+        case "offer":
+          msg.to === selfId.current && handleOffer(msg);
+          break;
+
+        case "answer":
+          msg.to === selfId.current &&
+            peerConns.current[msg.from]?.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          break;
+
+        case "candidate":
+          msg.to === selfId.current &&
+            peerConns.current[msg.from]?.addIceCandidate(new RTCIceCandidate(msg.candidate));
+          break;
+
+        case "chat":
+          setChatMessages((prev) => [...prev, { sender: msg.sender, text: msg.text }]);
+          break;
       }
     };
 
@@ -86,7 +111,6 @@ export function useWebRTC(roomId?: string) {
     const pc = new RTCPeerConnection(rtcConfig);
     peerConns.current[peerId] = pc;
 
-    /* color-coded state log */
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState as keyof typeof color;
       console.log(`%c[PC] ${peerId} → ${st}`, `color:${color[st]};font-weight:bold`);
@@ -96,12 +120,20 @@ export function useWebRTC(roomId?: string) {
 
     pc.ontrack = ({ streams: [remote] }) => {
       remoteStreams.current[peerId] = remote;
-      addClient(peerId, () => { if (videoNodes.current[peerId]) videoNodes.current[peerId]!.srcObject = remote; });
+      addClient(peerId, () => {
+        if (videoNodes.current[peerId]) videoNodes.current[peerId]!.srcObject = remote;
+      });
     };
 
     pc.onicecandidate = e => {
       if (e.candidate) {
-        const cand: CandidateMsg = { type: "candidate", room: roomId!, from: selfId.current, to: peerId, candidate: e.candidate.toJSON() };
+        const cand: CandidateMsg = {
+          type: "candidate",
+          room: roomId!,
+          from: selfId.current,
+          to: peerId,
+          candidate: e.candidate.toJSON()
+        };
         socketRef.current?.send(JSON.stringify(cand));
       }
     };
@@ -109,7 +141,13 @@ export function useWebRTC(roomId?: string) {
     if (isOfferer) {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      const msg: OfferMsg = { type: "offer", room: roomId!, from: selfId.current, to: peerId, sdp: offer };
+      const msg: OfferMsg = {
+        type: "offer",
+        room: roomId!,
+        from: selfId.current,
+        to: peerId,
+        sdp: offer
+      };
       socketRef.current?.send(JSON.stringify(msg));
     }
   }
@@ -120,21 +158,46 @@ export function useWebRTC(roomId?: string) {
     await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    const ans: AnswerMsg = { type: "answer", room: msg.room, from: selfId.current, to: msg.from, sdp: answer };
+    const ans: AnswerMsg = {
+      type: "answer",
+      room: msg.room,
+      from: selfId.current,
+      to: msg.from,
+      sdp: answer
+    };
     socketRef.current?.send(JSON.stringify(ans));
   }
 
+  /* ---------------- Chat helpers ---------------- */
+  function sendChatMessage(text: string) {
+    if (!roomId || !selfId.current || !socketRef.current) return;
+    const msg: ChatMsg = {
+      type: "chat",
+      room: roomId,
+      sender: selfId.current,
+      text,
+    };
+    setChatMessages(prev => [...prev, { sender: selfId.current, text }]);
+    socketRef.current.send(JSON.stringify(msg));
+  }
+
   /* ---------------- UI handlers ---------------- */
-  const toggleMic = () => { localStream.current?.getAudioTracks().forEach(t => t.enabled = !t.enabled); setMicOn(!micOn); };
-  const toggleCam = () => { localStream.current?.getVideoTracks().forEach(t => t.enabled = !t.enabled); setCamOn(!camOn); };
+  const toggleMic = () => {
+    localStream.current?.getAudioTracks().forEach(t => t.enabled = !t.enabled);
+    setMicOn(!micOn);
+  };
+
+  const toggleCam = () => {
+    localStream.current?.getVideoTracks().forEach(t => t.enabled = !t.enabled);
+    setCamOn(!camOn);
+  };
+
   const leaveRoom = () => {
     if (!socketRef.current) return;
-
     const leave: LeaveMsg = { type: "leave", room: roomId!, from: selfId.current };
     socketRef.current.send(JSON.stringify(leave));
     cleanupRef.current();
   };
-
 
   const bindVideo = (id: string, node: HTMLVideoElement | null) => {
     videoNodes.current[id] = node;
@@ -145,6 +208,13 @@ export function useWebRTC(roomId?: string) {
     clients: clients.filter(id => id !== selfId.current),
     localVideoRef,
     bindVideo,
-    micOn, camOn, toggleMic, toggleCam, leaveRoom,
+    micOn,
+    camOn,
+    toggleMic,
+    toggleCam,
+    leaveRoom,
+    chatMessages,
+    sendChatMessage,
+    myId: selfId.current,
   };
 }
